@@ -63,7 +63,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: jar-artifact
-          path: build/libs/*.jar
+          path: bluegreen/build/libs/*-SNAPSHOT.jar
           retention-days: 7
 
   deploy:
@@ -85,7 +85,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: jar-artifact
-          path: build/libs/
+          path: bluegreen/build/libs/
 
       - name: Set up environment variables
         run: |

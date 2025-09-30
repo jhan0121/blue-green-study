@@ -20,9 +20,9 @@ if ! docker ps | grep -q "app_blue"; then
     done
 fi
 
-# Nginx 업스트림 변경
+# Nginx 업스트림 변경 (심볼릭 링크)
 echo "Updating Nginx configuration..."
-docker exec nginx_lb cp /etc/nginx/nginx-blue.conf /etc/nginx/nginx.conf
+docker exec nginx_lb ln -sf /etc/nginx/upstream-blue.conf /etc/nginx/upstream.conf
 docker exec nginx_lb nginx -s reload
 
 echo "Traffic switched to Blue environment!"
@@ -39,7 +39,7 @@ if echo "$RESPONSE" | grep -iq blue; then
     docker-compose stop app_green mysql_green
 else
     echo "❌ Switch failed! Rolling back..."
-    docker exec nginx_lb cp /etc/nginx/nginx-green.conf /etc/nginx/nginx.conf
+    docker exec nginx_lb ln -sf /etc/nginx/upstream-green.conf /etc/nginx/upstream.conf
     docker exec nginx_lb nginx -s reload
     exit 1
 fi

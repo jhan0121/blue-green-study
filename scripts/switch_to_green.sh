@@ -36,9 +36,9 @@ if [ "$lag" != "0" ] && [ "$lag" != "NULL" ] && [ -n "$lag" ]; then
     sleep $((lag + 5))
 fi
 
-# Nginx 업스트림 변경
+# Nginx 업스트림 변경 (심볼릭 링크)
 echo "Updating Nginx configuration..."
-docker exec nginx_lb cp /etc/nginx/nginx-green.conf /etc/nginx/nginx.conf
+docker exec nginx_lb ln -sf /etc/nginx/upstream-green.conf /etc/nginx/upstream.conf
 docker exec nginx_lb nginx -s reload
 
 echo "Traffic switched to Green environment!"
@@ -55,7 +55,7 @@ if echo "$RESPONSE" | grep -iq green; then
     docker-compose stop app_blue mysql_blue
 else
     echo "❌ Switch failed! Rolling back..."
-    docker exec nginx_lb cp /etc/nginx/nginx-blue.conf /etc/nginx/nginx.conf
+    docker exec nginx_lb ln -sf /etc/nginx/upstream-blue.conf /etc/nginx/upstream.conf
     docker exec nginx_lb nginx -s reload
     exit 1
 fi

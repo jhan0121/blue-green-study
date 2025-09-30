@@ -1,13 +1,38 @@
-name: Blue-Green Auto Deployment
+name: Blue-Green Deployment Pipeline
 
 on:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment (auto/blue/green)'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - blue
+          - green
+      force_deploy:
+        description: 'Force deployment even if tests fail'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  MYSQL_ROOT_PASSWORD: rootpass
+  MYSQL_DATABASE: bluegreen
+  MYSQL_USER: app_user
+  MYSQL_PASSWORD: app_pass
+  BUILD_NUMBER: ${{ github.run_number }}
 
 jobs:
-  deploy:
-    runs-on: self-hosted
+  test:
+    name: 🧪 Test Application
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
@@ -19,102 +44,374 @@ jobs:
           java-version: '21'
           distribution: 'corretto'
 
-      - name: Build application
-        run: |
-          chmod +x gradlew
-          ./gradlew clean bootJar
+      - name: Cache Gradle packages
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
 
-      - name: Detect current environment and setup
+      - name: Make gradlew executable
+        run: chmod +x bluegreen/gradlew
+
+      - name: Run tests
+        working-directory: bluegreen
+        run: ./gradlew test
+
+      - name: Build application
+        working-directory: bluegreen
+        run: ./gradlew clean build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: jar-artifact
+          path: bluegreen/build/libs/*.jar
+          retention-days: 7
+
+  deploy:
+    name: 🚀 Deploy to Production
+    runs-on: self-hosted
+    needs: test
+    if: github.ref == 'refs/heads/main' && (success() || github.event.inputs.force_deploy == 'true')
+
+    outputs:
+      current_env: ${{ steps.detect.outputs.current }}
+      target_env: ${{ steps.detect.outputs.target }}
+      deploy_success: ${{ steps.deploy_result.outputs.success }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: jar-artifact
+          path: bluegreen/build/libs/
+
+      - name: Set up environment variables
+        run: |
+          # .env 파일 설정 확인 및 생성
+          if [ ! -f .env ]; then
+            echo "BUILD_NUMBER=${{ env.BUILD_NUMBER }}" > .env
+            echo "MYSQL_ROOT_PASSWORD=${{ env.MYSQL_ROOT_PASSWORD }}" >> .env
+            echo "MYSQL_DATABASE=${{ env.MYSQL_DATABASE }}" >> .env
+            echo "MYSQL_USER=${{ env.MYSQL_USER }}" >> .env
+            echo "MYSQL_PASSWORD=${{ env.MYSQL_PASSWORD }}" >> .env
+          fi
+
+          # 환경 변수 로드
+          source .env
+
+      - name: Detect current environment and determine target
         id: detect
         run: |
-          # 현재 실행 중인 환경 확인
-          if docker ps | grep -q "app_blue"; then
-            CURRENT="blue"
-            NEW="green"
-          elif docker ps | grep -q "app_green"; then
-            CURRENT="green"  
-            NEW="blue"
+          set -e
+
+          # 수동으로 환경이 지정된 경우
+          if [ "${{ github.event.inputs.environment }}" != "auto" ] && [ "${{ github.event.inputs.environment }}" != "" ]; then
+            TARGET="${{ github.event.inputs.environment }}"
+            echo "🎯 Manual target environment: $TARGET"
           else
-            # 아무것도 실행 중이지 않으면 blue로 시작
-            CURRENT="none"
-            NEW="blue"
+            # 현재 실행 중인 환경 자동 감지
+            if docker ps --format "table {{.Names}}" | grep -q "app_blue" && curl -s http://localhost:3030/health | grep -i blue; then
+              CURRENT="blue"
+              TARGET="green"
+            elif docker ps --format "table {{.Names}}" | grep -q "app_green" && curl -s http://localhost:3030/health | grep -i green; then
+              CURRENT="green"
+              TARGET="blue"
+            else
+              # 아무것도 실행 중이지 않거나 감지할 수 없으면 blue로 시작
+              CURRENT="none"
+              TARGET="blue"
+            fi
+            echo "🔍 Auto-detected - Current: $CURRENT → Target: $TARGET"
           fi
-          
-          echo "current=$CURRENT" >> $GITHUB_OUTPUT
-          echo "new=$NEW" >> $GITHUB_OUTPUT
-          echo "🎯 Current: $CURRENT → Deploying: $NEW"
+
+          echo "current=${CURRENT:-none}" >> $GITHUB_OUTPUT
+          echo "target=$TARGET" >> $GITHUB_OUTPUT
 
       - name: Build Docker image
         run: |
-          docker build -t myapp:${{ steps.detect.outputs.new }} .
+          TARGET_ENV=${{ steps.detect.outputs.target }}
+          echo "🏗️  Building Docker image: myapp:$TARGET_ENV"
+          docker build -t myapp:$TARGET_ENV .
 
-      - name: Start new environment
+      - name: Pre-deployment health check
         run: |
-          NEW_ENV=${{ steps.detect.outputs.new }}
-          BUILD_NUMBER=${{ github.run_number }}
-          
-          export BUILD_NUMBER=$BUILD_NUMBER
-          
-          if [ "$NEW_ENV" = "green" ]; then
-            docker-compose --profile green up -d app_green mysql_green
+          echo "🏥 Pre-deployment system health check"
+
+          # Docker 상태 확인
+          docker system df
+
+          # 디스크 공간 확인
+          df -h
+
+          # 기존 Nginx가 실행 중인지 확인
+          if ! docker ps | grep -q "nginx_lb"; then
+            echo "🔧 Starting Nginx load balancer"
+            docker-compose up -d nginx
+            sleep 5
+          fi
+
+      - name: Setup MySQL replication (if needed)
+        run: |
+          TARGET_ENV=${{ steps.detect.outputs.target }}
+          CURRENT_ENV=${{ steps.detect.outputs.current }}
+
+          if [ "$CURRENT_ENV" != "none" ] && [ "$TARGET_ENV" = "green" ]; then
+            echo "🔄 Setting up MySQL replication for Green environment"
+
+            # Green MySQL 시작
+            docker-compose up -d mysql_green
+            sleep 10
+
+            # 복제 설정 실행
+            chmod +x scripts/setup_replication.sh
+            ./scripts/setup_replication.sh || echo "⚠️  Replication setup failed, continuing with deployment"
+          fi
+
+      - name: Deploy new environment
+        id: deploy
+        run: |
+          set -e
+          TARGET_ENV=${{ steps.detect.outputs.target }}
+          CURRENT_ENV=${{ steps.detect.outputs.current }}
+
+          echo "🚀 Deploying to $TARGET_ENV environment"
+
+          # 환경별 배포
+          export BUILD_NUMBER=${{ env.BUILD_NUMBER }}
+          export MYSQL_ROOT_PASSWORD=${{ env.MYSQL_ROOT_PASSWORD }}
+          export MYSQL_USER=${{ env.MYSQL_USER }}
+          export MYSQL_PASSWORD=${{ env.MYSQL_PASSWORD }}
+
+          if [ "$TARGET_ENV" = "green" ]; then
+            docker-compose up -d app_green mysql_green
           else
             docker-compose up -d app_blue mysql_blue
           fi
-          
-          # nginx가 없으면 시작
-          if ! docker ps | grep -q "nginx_lb"; then
-            docker-compose up -d nginx
-          fi
 
-      - name: Wait for health check
+      - name: Wait for application readiness
+        timeout-minutes: 10
         run: |
-          NEW_ENV=${{ steps.detect.outputs.new }}
-          
-          echo "⏳ Waiting for $NEW_ENV to be healthy..."
-          for i in {1..30}; do
-            if docker exec app_$NEW_ENV curl -s -f http://localhost:8080/health > /dev/null 2>&1; then
-              echo "✅ $NEW_ENV is ready!"
+          TARGET_ENV=${{ steps.detect.outputs.target }}
+          echo "⏳ Waiting for $TARGET_ENV environment to be ready..."
+
+          MAX_ATTEMPTS=30
+          ATTEMPT=0
+
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+
+            if docker exec app_$TARGET_ENV curl -s -f http://localhost:8080/health >/dev/null 2>&1; then
+              echo "✅ $TARGET_ENV environment is healthy!"
+
+              # 추가 검증
+              HEALTH_RESPONSE=$(docker exec app_$TARGET_ENV curl -s http://localhost:8080/health)
+              VERSION_RESPONSE=$(docker exec app_$TARGET_ENV curl -s http://localhost:8080/version)
+
+              echo "Health: $HEALTH_RESPONSE"
+              echo "Version: $VERSION_RESPONSE"
               break
             fi
-            echo "Attempt $i/30..."
+
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS: $TARGET_ENV not ready yet..."
             sleep 10
           done
 
-      - name: Switch traffic
-        run: |
-          NEW_ENV=${{ steps.detect.outputs.new }}
-          
-          # Nginx 설정 변경
-          if [ "$NEW_ENV" = "green" ]; then
-            cp nginx/nginx-green.conf nginx/nginx.conf
-          else
-            cp nginx/nginx-blue.conf nginx/nginx.conf
-          fi
-          
-          docker exec nginx_lb nginx -s reload
-          echo "🔄 Traffic switched to $NEW_ENV!"
-
-      - name: Verify and cleanup
-        run: |
-          NEW_ENV=${{ steps.detect.outputs.new }}
-          CURRENT_ENV=${{ steps.detect.outputs.current }}
-          
-          sleep 5
-          RESPONSE=$(curl -s http://localhost:3030/health)
-          
-          if echo "$RESPONSE" | grep -q "$NEW_ENV"; then
-            echo "✅ Success! Response: $RESPONSE"
-          
-            # 이전 환경 정리 (none이 아닌 경우에만)
-            if [ "$CURRENT_ENV" != "none" ]; then
-              sleep 10
-              docker-compose stop app_$CURRENT_ENV
-            fi
-          else
-            echo "❌ Failed! Response: $RESPONSE"
+          if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+            echo "❌ $TARGET_ENV environment failed to become ready"
             exit 1
           fi
 
-      - name: Summary
+      - name: Switch traffic using deployment scripts
         run: |
-          echo "🎉 Deployment completed!"
+          TARGET_ENV=${{ steps.detect.outputs.target }}
+
+          echo "🔄 Switching traffic to $TARGET_ENV using deployment scripts"
+
+          # 배포 스크립트 실행 권한 부여
+          chmod +x scripts/*.sh
+
+          # 환경에 따른 스크립트 실행
+          if [ "$TARGET_ENV" = "green" ]; then
+            ./scripts/switch_to_green.sh
+          else
+            ./scripts/switch_to_blue.sh
+          fi
+
+      - name: Post-deployment verification
+        id: verify
+        run: |
+          TARGET_ENV=${{ steps.detect.outputs.target }}
+
+          echo "🔍 Post-deployment verification"
+
+          # 잠시 대기
+          sleep 5
+
+          # 외부에서 접근 가능한 엔드포인트 테스트
+          MAX_RETRIES=10
+          RETRY=0
+
+          while [ $RETRY -lt $MAX_RETRIES ]; do
+            RETRY=$((RETRY + 1))
+
+            HEALTH_RESPONSE=$(curl -s http://localhost:3030/health || echo "FAILED")
+            VERSION_RESPONSE=$(curl -s http://localhost:3030/version || echo "FAILED")
+
+            if echo "$HEALTH_RESPONSE" | grep -i "$TARGET_ENV" && [ "$HEALTH_RESPONSE" != "FAILED" ]; then
+              echo "✅ Verification successful!"
+              echo "Health: $HEALTH_RESPONSE"
+              echo "Version: $VERSION_RESPONSE"
+              echo "success=true" >> $GITHUB_OUTPUT
+              break
+            fi
+
+            echo "Retry $RETRY/$MAX_RETRIES: Verification failed, retrying..."
+            sleep 3
+          done
+
+          if [ $RETRY -eq $MAX_RETRIES ]; then
+            echo "❌ Post-deployment verification failed"
+            echo "Health response: $HEALTH_RESPONSE"
+            echo "Version response: $VERSION_RESPONSE"
+            echo "success=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Cleanup old environment
+        if: steps.verify.outputs.success == 'true'
+        run: |
+          TARGET_ENV=${{ steps.detect.outputs.target }}
+          CURRENT_ENV=${{ steps.detect.outputs.current }}
+
+          if [ "$CURRENT_ENV" != "none" ] && [ "$CURRENT_ENV" != "$TARGET_ENV" ]; then
+            echo "🧹 Cleaning up old environment: $CURRENT_ENV"
+
+            # 잠시 대기 후 정리
+            sleep 10
+            docker-compose stop app_$CURRENT_ENV mysql_$CURRENT_ENV || echo "⚠️  Cleanup warning: containers may have already been stopped"
+
+            echo "✅ Cleanup completed"
+          else
+            echo "ℹ️  No cleanup needed"
+          fi
+
+      - name: Set deployment result
+        id: deploy_result
+        run: |
+          if [ "${{ steps.verify.outputs.success }}" == "true" ]; then
+            echo "success=true" >> $GITHUB_OUTPUT
+          else
+            echo "success=false" >> $GITHUB_OUTPUT
+          fi
+
+  integration-test:
+    name: 🧪 Integration Tests
+    runs-on: self-hosted
+    needs: deploy
+    if: needs.deploy.outputs.deploy_success == 'true'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run integration tests
+        run: |
+          echo "🧪 Running integration tests"
+
+          # 통합 테스트 스크립트 실행
+          chmod +x scripts/test_deployment.sh
+          ./scripts/test_deployment.sh
+
+      - name: Performance smoke test
+        run: |
+          echo "⚡ Running performance smoke test"
+
+          # 간단한 부하 테스트
+          for i in {1..10}; do
+            curl -s http://localhost:3030/health >/dev/null
+            curl -s http://localhost:3030/version >/dev/null
+            sleep 0.1
+          done
+
+          echo "✅ Performance smoke test completed"
+
+  rollback:
+    name: 🔄 Rollback (if needed)
+    runs-on: self-hosted
+    needs: [ deploy, integration-test ]
+    if: failure() && needs.deploy.outputs.current_env != 'none'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Execute rollback
+        run: |
+          CURRENT_ENV="${{ needs.deploy.outputs.current_env }}"
+
+          if [ "$CURRENT_ENV" != "none" ]; then
+            echo "🔄 Rolling back to $CURRENT_ENV environment"
+
+            chmod +x scripts/*.sh
+
+            if [ "$CURRENT_ENV" = "blue" ]; then
+              ./scripts/switch_to_blue.sh
+            else
+              ./scripts/switch_to_green.sh
+            fi
+
+            echo "✅ Rollback completed"
+          else
+            echo "⚠️  No previous environment to rollback to"
+          fi
+
+      - name: Verify rollback
+        run: |
+          CURRENT_ENV="${{ needs.deploy.outputs.current_env }}"
+
+          if [ "$CURRENT_ENV" != "none" ]; then
+            sleep 5
+            HEALTH_RESPONSE=$(curl -s http://localhost:3030/health)
+
+            if echo "$HEALTH_RESPONSE" | grep -i "$CURRENT_ENV"; then
+              echo "✅ Rollback verification successful: $HEALTH_RESPONSE"
+            else
+              echo "❌ Rollback verification failed: $HEALTH_RESPONSE"
+              exit 1
+            fi
+          fi
+
+  notify:
+    name: 📢 Notify Results
+    runs-on: self-hosted
+    needs: [ deploy, integration-test ]
+    if: always()
+
+    steps:
+      - name: Deployment Summary
+        run: |
+          echo "🎯 Deployment Summary"
+          echo "===================="
+          echo "Repository: ${{ github.repository }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Build Number: ${{ env.BUILD_NUMBER }}"
+          echo "Current Environment: ${{ needs.deploy.outputs.current_env }}"
+          echo "Target Environment: ${{ needs.deploy.outputs.target_env }}"
+          echo "Deploy Success: ${{ needs.deploy.outputs.deploy_success }}"
+          echo "Integration Tests: ${{ needs.integration-test.result }}"
+          echo ""
+
+          if [ "${{ needs.deploy.outputs.deploy_success }}" == "true" ] && [ "${{ needs.integration-test.result }}" == "success" ]; then
+            echo "🎉 Deployment completed successfully!"
+          else
+            echo "❌ Deployment encountered issues"
+          fi

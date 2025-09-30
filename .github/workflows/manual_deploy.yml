@@ -1,0 +1,167 @@
+name: Manual Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_environment:
+        description: 'Target Environment'
+        required: true
+        type: choice
+        options:
+          - blue
+          - green
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - deploy
+          - rollback
+          - health_check
+      skip_tests:
+        description: 'Skip tests (emergency deployment)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  MYSQL_ROOT_PASSWORD: rootpass
+  MYSQL_DATABASE: bluegreen
+  MYSQL_USER: app_user
+  MYSQL_PASSWORD: app_pass
+  BUILD_NUMBER: manual-${{ github.run_number }}
+
+jobs:
+  manual_deploy:
+    name: 🎯 Manual ${{ github.event.inputs.action }} to ${{ github.event.inputs.target_environment }}
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate inputs
+        run: |
+          echo "🎯 Manual Deployment Request"
+          echo "=========================="
+          echo "Action: ${{ github.event.inputs.action }}"
+          echo "Target Environment: ${{ github.event.inputs.target_environment }}"
+          echo "Skip Tests: ${{ github.event.inputs.skip_tests }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "Build Number: ${{ env.BUILD_NUMBER }}"
+
+      - name: Run tests
+        if: github.event.inputs.skip_tests == 'false' && github.event.inputs.action == 'deploy'
+        working-directory: bluegreen
+        run: |
+          chmod +x gradlew
+          ./gradlew test
+
+      - name: Build application
+        if: github.event.inputs.action == 'deploy'
+        working-directory: bluegreen
+        run: |
+          chmod +x gradlew
+          ./gradlew clean build
+
+      - name: Health check
+        if: github.event.inputs.action == 'health_check'
+        run: |
+          echo "🏥 Performing health check on ${{ github.event.inputs.target_environment }} environment"
+          
+          TARGET_ENV="${{ github.event.inputs.target_environment }}"
+          
+          # 컨테이너 상태 확인
+          if docker ps | grep -q "app_$TARGET_ENV"; then
+            echo "✅ Container app_$TARGET_ENV is running"
+          
+            # 헬스체크
+            if docker exec app_$TARGET_ENV curl -s -f http://localhost:8080/health >/dev/null 2>&1; then
+              HEALTH=$(docker exec app_$TARGET_ENV curl -s http://localhost:8080/health)
+              VERSION=$(docker exec app_$TARGET_ENV curl -s http://localhost:8080/version)
+              echo "✅ Health check passed"
+              echo "Health: $HEALTH"
+              echo "Version: $VERSION"
+            else
+              echo "❌ Health check failed"
+              exit 1
+            fi
+          else
+            echo "❌ Container app_$TARGET_ENV is not running"
+            exit 1
+          fi
+
+      - name: Deploy to target environment
+        if: github.event.inputs.action == 'deploy'
+        run: |
+          TARGET_ENV="${{ github.event.inputs.target_environment }}"
+          
+          echo "🚀 Deploying to $TARGET_ENV environment"
+          
+          # Docker 이미지 빌드
+          docker build -t myapp:$TARGET_ENV .
+          
+          # 환경 변수 설정
+          export BUILD_NUMBER="${{ env.BUILD_NUMBER }}"
+          export MYSQL_ROOT_PASSWORD="${{ env.MYSQL_ROOT_PASSWORD }}"
+          export MYSQL_USER="${{ env.MYSQL_USER }}"
+          export MYSQL_PASSWORD="${{ env.MYSQL_PASSWORD }}"
+          
+          # 배포 스크립트 실행
+          chmod +x scripts/*.sh
+          
+          if [ "$TARGET_ENV" = "green" ]; then
+            ./scripts/switch_to_green.sh
+          else
+            ./scripts/switch_to_blue.sh
+          fi
+
+      - name: Rollback
+        if: github.event.inputs.action == 'rollback'
+        run: |
+          TARGET_ENV="${{ github.event.inputs.target_environment }}"
+          
+          echo "🔄 Rolling back to $TARGET_ENV environment"
+          
+          chmod +x scripts/*.sh
+          
+          if [ "$TARGET_ENV" = "blue" ]; then
+            ./scripts/switch_to_blue.sh
+          else
+            ./scripts/switch_to_green.sh
+          fi
+
+      - name: Verify action result
+        if: github.event.inputs.action != 'health_check'
+        run: |
+          TARGET_ENV="${{ github.event.inputs.target_environment }}"
+          ACTION="${{ github.event.inputs.action }}"
+          
+          echo "🔍 Verifying $ACTION result for $TARGET_ENV"
+          
+          sleep 5
+          HEALTH_RESPONSE=$(curl -s http://localhost:3030/health || echo "FAILED")
+          
+          if echo "$HEALTH_RESPONSE" | grep -i "$TARGET_ENV"; then
+            echo "✅ $ACTION to $TARGET_ENV successful!"
+            echo "Response: $HEALTH_RESPONSE"
+          else
+            echo "❌ $ACTION to $TARGET_ENV failed!"
+            echo "Response: $HEALTH_RESPONSE"
+            exit 1
+          fi
+
+      - name: Summary
+        run: |
+          echo "📋 Manual Operation Summary"
+          echo "=========================="
+          echo "Action: ${{ github.event.inputs.action }}"
+          echo "Target: ${{ github.event.inputs.target_environment }}"
+          echo "Status: ✅ Completed"
+          echo "Operator: ${{ github.actor }}"
+          echo "Time: $(date)"
+          
+          if [ "${{ github.event.inputs.action }}" != "health_check" ]; then
+            CURRENT_RESPONSE=$(curl -s http://localhost:3030/health)
+            echo "Current Environment: $CURRENT_RESPONSE"
+          fi

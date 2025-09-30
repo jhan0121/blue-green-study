@@ -1,0 +1,129 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches: [ main ]
+    types: [ opened, synchronize, reopened ]
+
+env:
+  MYSQL_ROOT_PASSWORD: rootpass
+  MYSQL_DATABASE: bluegreen
+  MYSQL_USER: app_user
+  MYSQL_PASSWORD: app_pass
+
+jobs:
+  validate:
+    name: 🔍 Validate Changes
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'corretto'
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Make gradlew executable
+        run: chmod +x bluegreen/gradlew
+
+      - name: Run tests
+        working-directory: bluegreen
+        run: ./gradlew test
+
+      - name: Build application
+        working-directory: bluegreen
+        run: ./gradlew clean build
+
+      - name: Test Docker build
+        run: |
+          echo "🐳 Testing Docker image build"
+          docker build -t myapp:pr-test .
+
+      - name: Validate deployment scripts
+        run: |
+          echo "🔧 Validating deployment scripts"
+          
+          # 스크립트 실행 권한 확인
+          chmod +x scripts/*.sh
+          
+          # 스크립트 문법 검사
+          for script in scripts/*.sh; do
+            echo "Checking $script"
+            bash -n "$script"
+          done
+
+      - name: Validate Docker Compose
+        run: |
+          echo "🐳 Validating Docker Compose configuration"
+          docker-compose config
+
+      - name: Security scan (basic)
+        run: |
+          echo "🔒 Basic security validation"
+          
+          # 민감한 정보가 코드에 노출되었는지 확인
+          if grep -r "password.*=" . --exclude-dir=.git --include="*.java" --include="*.yml" --include="*.yaml" | grep -v "MYSQL_PASSWORD" | grep -v "password.*\${" | grep -v "password.*placeholder"; then
+            echo "❌ Potential hardcoded passwords found"
+            exit 1
+          fi
+          
+          echo "✅ No obvious security issues found"
+
+      - name: Comment PR
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const botComment = comments.find(comment => 
+              comment.user.type === 'Bot' && 
+              comment.body.includes('PR Validation Results')
+            );
+            
+            const commentBody = `## 🔍 PR Validation Results
+            
+            ✅ **Tests**: Passed
+            ✅ **Build**: Successful  
+            ✅ **Docker**: Image builds successfully
+            ✅ **Scripts**: Syntax validation passed
+            ✅ **Configuration**: Docker Compose is valid
+            ✅ **Security**: Basic validation passed
+            
+            This PR is ready for review and merge.
+            
+            ---
+            *Automated validation completed at ${new Date().toISOString()}*`;
+            
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: commentBody
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: commentBody
+              });
+            }

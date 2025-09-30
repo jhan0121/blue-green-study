@@ -140,27 +140,32 @@ jobs:
           # 디스크 공간 확인
           df -h
 
-          # Nginx가 실행 중인지 확인
-          if ! docker ps | grep -q "nginx_lb"; then
+          # Nginx 컨테이너 볼륨 마운트 확인 및 재생성
+          if docker ps -a | grep -q "nginx_lb"; then
+            echo "🔧 Checking if Nginx needs volume update..."
+            # upstream 파일이 마운트되었는지 확인
+            if ! docker exec nginx_lb test -f /etc/nginx/upstream-blue.conf 2>/dev/null || \
+               ! docker exec nginx_lb test -f /etc/nginx/upstream-green.conf 2>/dev/null; then
+              echo "⚠️  Volume mounts outdated, recreating Nginx container..."
+              docker-compose up -d --force-recreate nginx
+              sleep 5
+            else
+              echo "✅ Nginx volume mounts are up to date"
+            fi
+          else
             echo "🔧 Starting Nginx load balancer"
             docker-compose up -d nginx
             sleep 5
           fi
 
-          # Upstream 설정 파일이 컨테이너에 존재하는지 확인
-          echo "✅ Verifying Nginx upstream configuration files..."
-          if ! docker exec nginx_lb test -f /etc/nginx/upstream-blue.conf || ! docker exec nginx_lb test -f /etc/nginx/upstream-green.conf; then
-            echo "⚠️  Upstream configuration files missing, copying to container..."
-            docker cp nginx/upstream-blue.conf nginx_lb:/etc/nginx/upstream-blue.conf
-            docker cp nginx/upstream-green.conf nginx_lb:/etc/nginx/upstream-green.conf
-          fi
-
           # 초기 심볼릭 링크가 없으면 blue로 설정
-          if ! docker exec nginx_lb test -L /etc/nginx/upstream.conf; then
+          if ! docker exec nginx_lb test -L /etc/nginx/upstream.conf 2>/dev/null; then
             echo "🔗 Creating initial symlink to blue environment..."
             docker exec nginx_lb ln -sf /etc/nginx/upstream-blue.conf /etc/nginx/upstream.conf
+            docker exec nginx_lb nginx -s reload
           fi
 
+          echo "✅ Nginx configuration status:"
           docker exec nginx_lb ls -la /etc/nginx/ | grep -E "upstream"
 
       - name: Setup MySQL replication (if needed)

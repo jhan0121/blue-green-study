@@ -347,22 +347,23 @@ jobs:
             exit 1
           fi
 
-      - name: Cleanup old environment
+      - name: Keep old environment for replication
         if: steps.verify.outputs.success == 'true'
         run: |
           TARGET_ENV=${{ steps.detect.outputs.target }}
           CURRENT_ENV=${{ steps.detect.outputs.current }}
 
           if [ "$CURRENT_ENV" != "none" ] && [ "$CURRENT_ENV" != "$TARGET_ENV" ]; then
-            echo "🧹 Cleaning up old environment: $CURRENT_ENV"
+            echo "ℹ️  Keeping $CURRENT_ENV environment running for reverse replication"
+            echo "ℹ️  $CURRENT_ENV MySQL is now slave of $TARGET_ENV"
 
-            # 잠시 대기 후 정리
-            sleep 10
-            docker-compose stop app_$CURRENT_ENV mysql_$CURRENT_ENV || echo "⚠️  Cleanup warning: containers may have already been stopped"
+            # 역방향 복제 상태 확인
+            echo "Checking reverse replication status..."
+            docker exec mysql_$CURRENT_ENV mysql -u root -p${{ secrets.MYSQL_ROOT_PASSWORD }} -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep -E "(Slave_IO_Running|Slave_SQL_Running|Seconds_Behind_Master)" || echo "⚠️  Replication status check failed"
 
-            echo "✅ Cleanup completed"
+            echo "✅ Both environments are now synchronized for instant rollback"
           else
-            echo "ℹ️  No cleanup needed"
+            echo "ℹ️  No previous environment to maintain replication"
           fi
 
       - name: Set deployment result

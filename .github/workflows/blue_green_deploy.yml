@@ -140,12 +140,22 @@ jobs:
           # 디스크 공간 확인
           df -h
 
-          # 기존 Nginx가 실행 중인지 확인
+          # Nginx가 실행 중인지 확인
           if ! docker ps | grep -q "nginx_lb"; then
             echo "🔧 Starting Nginx load balancer"
             docker-compose up -d nginx
             sleep 5
           fi
+
+          # 설정 파일이 컨테이너에 존재하는지 확인
+          echo "✅ Verifying Nginx configuration files..."
+          if ! docker exec nginx_lb test -f /etc/nginx/nginx-blue.conf || ! docker exec nginx_lb test -f /etc/nginx/nginx-green.conf; then
+            echo "⚠️  Configuration files missing, copying to container..."
+            docker cp nginx/nginx-blue.conf nginx_lb:/etc/nginx/nginx-blue.conf
+            docker cp nginx/nginx-green.conf nginx_lb:/etc/nginx/nginx-green.conf
+          fi
+
+          docker exec nginx_lb ls -la /etc/nginx/ | grep -E "nginx.*\.conf"
 
       - name: Setup MySQL replication (if needed)
         run: |

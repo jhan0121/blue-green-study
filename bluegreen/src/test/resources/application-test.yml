@@ -1,0 +1,34 @@
+spring:
+  config:
+    activate:
+      on-profile: test
+  
+  # 테스트용 인메모리 데이터베이스 사용
+  datasource:
+    url: jdbc:h2:mem:testdb
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  
+  # H2 콘솔 활성화 (테스트 시에만)
+  h2:
+    console:
+      enabled: true
+  
+  # JPA 설정
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+  
+  # Flyway 비활성화 (테스트에서는 JPA가 스키마 생성)
+  flyway:
+    enabled: false
+
+# 테스트 환경 로깅 설정
+logging:
+  level:
+    com.study.bluegreen: DEBUG
+    org.springframework: WARN
+    org.hibernate: WARN

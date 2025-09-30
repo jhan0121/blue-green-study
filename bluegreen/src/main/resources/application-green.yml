@@ -1,0 +1,20 @@
+spring:
+  config:
+    activate:
+      on-profile: green
+
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://mysql_green:3306/bluegreen}
+    username: ${SPRING_DATASOURCE_USERNAME:app_user}
+    password: ${SPRING_DATASOURCE_PASSWORD:app_pass}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+app:
+  environment: green
+  build-number: ${BUILD_NUMBER:1}
+
+logging:
+  level:
+    com.study.bluegreen: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level [GREEN] %logger{36} - %msg%n"

@@ -1,19 +1,26 @@
-spring:
-  application:
-    name: bluegreen
+server:
+  port: 8080
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+spring:
   datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/bluegreen}
+    username: ${SPRING_DATASOURCE_USERNAME:app_user}
+    password: ${SPRING_DATASOURCE_PASSWORD:app_pass}
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:43306/bluegreen
-    username: root
-    password: 1234
+
+  flyway:
+    enabled: true
 
   jpa:
     show-sql: true
     hibernate:
-      ddl-auto: create
-    properties:
-      hibernate:
-        format_sql: true
-    database-platform: org.hibernate.dialect.MySQLDialect
-    open-in-view: false
+      ddl-auto: validate

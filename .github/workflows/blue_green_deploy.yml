@@ -1,0 +1,120 @@
+name: Blue-Green Auto Deployment
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'corretto'
+
+      - name: Build application
+        run: |
+          chmod +x gradlew
+          ./gradlew clean bootJar
+
+      - name: Detect current environment and setup
+        id: detect
+        run: |
+          # 현재 실행 중인 환경 확인
+          if docker ps | grep -q "app_blue"; then
+            CURRENT="blue"
+            NEW="green"
+          elif docker ps | grep -q "app_green"; then
+            CURRENT="green"  
+            NEW="blue"
+          else
+            # 아무것도 실행 중이지 않으면 blue로 시작
+            CURRENT="none"
+            NEW="blue"
+          fi
+          
+          echo "current=$CURRENT" >> $GITHUB_OUTPUT
+          echo "new=$NEW" >> $GITHUB_OUTPUT
+          echo "🎯 Current: $CURRENT → Deploying: $NEW"
+
+      - name: Build Docker image
+        run: |
+          docker build -t myapp:${{ steps.detect.outputs.new }} .
+
+      - name: Start new environment
+        run: |
+          NEW_ENV=${{ steps.detect.outputs.new }}
+          BUILD_NUMBER=${{ github.run_number }}
+          
+          export BUILD_NUMBER=$BUILD_NUMBER
+          
+          if [ "$NEW_ENV" = "green" ]; then
+            docker-compose --profile green up -d app_green mysql_green
+          else
+            docker-compose up -d app_blue mysql_blue
+          fi
+          
+          # nginx가 없으면 시작
+          if ! docker ps | grep -q "nginx_lb"; then
+            docker-compose up -d nginx
+          fi
+
+      - name: Wait for health check
+        run: |
+          NEW_ENV=${{ steps.detect.outputs.new }}
+          
+          echo "⏳ Waiting for $NEW_ENV to be healthy..."
+          for i in {1..30}; do
+            if docker exec app_$NEW_ENV curl -s -f http://localhost:8080/health > /dev/null 2>&1; then
+              echo "✅ $NEW_ENV is ready!"
+              break
+            fi
+            echo "Attempt $i/30..."
+            sleep 10
+          done
+
+      - name: Switch traffic
+        run: |
+          NEW_ENV=${{ steps.detect.outputs.new }}
+          
+          # Nginx 설정 변경
+          if [ "$NEW_ENV" = "green" ]; then
+            cp nginx/nginx-green.conf nginx/nginx.conf
+          else
+            cp nginx/nginx-blue.conf nginx/nginx.conf
+          fi
+          
+          docker exec nginx_lb nginx -s reload
+          echo "🔄 Traffic switched to $NEW_ENV!"
+
+      - name: Verify and cleanup
+        run: |
+          NEW_ENV=${{ steps.detect.outputs.new }}
+          CURRENT_ENV=${{ steps.detect.outputs.current }}
+          
+          sleep 5
+          RESPONSE=$(curl -s http://localhost:3030/health)
+          
+          if echo "$RESPONSE" | grep -q "$NEW_ENV"; then
+            echo "✅ Success! Response: $RESPONSE"
+          
+            # 이전 환경 정리 (none이 아닌 경우에만)
+            if [ "$CURRENT_ENV" != "none" ]; then
+              sleep 10
+              docker-compose stop app_$CURRENT_ENV
+            fi
+          else
+            echo "❌ Failed! Response: $RESPONSE"
+            exit 1
+          fi
+
+      - name: Summary
+        run: |
+          echo "🎉 Deployment completed!"

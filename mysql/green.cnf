@@ -1,0 +1,11 @@
+[mysqld]
+server-id = 2
+log-bin = mysql-bin
+binlog-format = ROW
+gtid-mode = ON
+enforce-gtid-consistency = ON
+read-only = 1
+
+# 복제 설정
+relay-log = mysql-relay-bin
+log-slave-updates = 1

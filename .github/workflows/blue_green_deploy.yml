@@ -158,6 +158,25 @@ jobs:
             sleep 5
           fi
 
+          # 컨테이너가 완전히 실행될 때까지 대기
+          echo "⏳ Waiting for Nginx container to be fully ready..."
+          MAX_WAIT=30
+          WAIT_COUNT=0
+          while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
+            if docker exec nginx_lb test -f /etc/nginx/nginx.conf 2>/dev/null; then
+              echo "✅ Nginx container is ready"
+              break
+            fi
+            WAIT_COUNT=$((WAIT_COUNT + 1))
+            echo "Waiting... ($WAIT_COUNT/$MAX_WAIT)"
+            sleep 1
+          done
+
+          if [ $WAIT_COUNT -eq $MAX_WAIT ]; then
+            echo "❌ Nginx container failed to become ready"
+            exit 1
+          fi
+
           # 초기 심볼릭 링크가 없으면 blue로 설정
           if ! docker exec nginx_lb test -L /etc/nginx/upstream.conf 2>/dev/null; then
             echo "🔗 Creating initial symlink to blue environment..."

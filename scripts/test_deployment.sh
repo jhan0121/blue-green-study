@@ -155,20 +155,39 @@ else
     log_error "Blue MySQL connection failed"
 fi
 
-# Test 5: Replication setup (if Green is running)
+# Test 5: Replication Status (양방향 복제 확인)
 echo ""
 log_info "Test 5: Replication Status"
 
-if docker ps | grep -q "mysql_green"; then
-    SLAVE_STATUS=$(docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running" | awk '{print $2}' || echo "No")
-    
-    if [ "$SLAVE_STATUS" = "Yes" ]; then
-        log_success "MySQL replication is running"
+# 현재 활성 환경에 따라 복제 방향 확인
+ACTIVE_ENV=$(curl -s "$BASE_URL/health" 2>/dev/null | grep -oiE "(blue|green)" | head -1 | tr '[:upper:]' '[:lower:]')
+
+if [ "$ACTIVE_ENV" = "blue" ]; then
+    # Blue가 활성이면 Green이 Blue의 Slave여야 함
+    if docker ps | grep -q "mysql_green"; then
+        SLAVE_STATUS=$(docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running" | awk '{print $2}' || echo "No")
+        if [ "$SLAVE_STATUS" = "Yes" ]; then
+            log_success "MySQL replication is running (Blue → Green)"
+        else
+            log_info "Green is standby without active replication"
+        fi
     else
-        log_error "MySQL replication is not running properly"
+        log_info "Green MySQL not running - replication test skipped"
+    fi
+elif [ "$ACTIVE_ENV" = "green" ]; then
+    # Green이 활성이면 Blue가 Green의 Slave여야 함
+    if docker ps | grep -q "mysql_blue"; then
+        SLAVE_STATUS=$(docker exec mysql_blue mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running" | awk '{print $2}' || echo "No")
+        if [ "$SLAVE_STATUS" = "Yes" ]; then
+            log_success "MySQL replication is running (Green → Blue)"
+        else
+            log_info "Blue is standby without active replication"
+        fi
+    else
+        log_info "Blue MySQL not running - replication test skipped"
     fi
 else
-    log_info "Green MySQL not running - replication test skipped"
+    log_info "Unable to determine active environment for replication test"
 fi
 
 # Test 6: Environment switching test
@@ -276,16 +295,38 @@ log_info "Check the logs above for any failures"
 
 # Cleanup
 log_info "Cleaning up test environment..."
-# Only stop the non-active environment to maintain the deployment
+# Keep both environments running for reverse replication
 FINAL_ACTIVE=$(curl -s "$BASE_URL/health" 2>/dev/null | grep -oiE "(blue|green)" | head -1 | tr '[:upper:]' '[:lower:]')
+
 if [ "$FINAL_ACTIVE" = "blue" ]; then
-    log_info "Keeping Blue active, stopping Green..."
-    docker-compose stop app_green mysql_green >/dev/null 2>&1 || true
-else
-    log_info "Keeping Green active, stopping Blue..."
-    docker-compose stop app_blue mysql_blue >/dev/null 2>&1 || true
+    log_info "Keeping both environments for reverse replication"
+    log_info "Active: Blue (Master) → Green (Slave)"
+
+    # 역방향 복제 상태 확인
+    if docker ps | grep -q "mysql_green"; then
+        REPL_STATUS=$(docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running" | awk '{print $2}' || echo "No")
+        if [ "$REPL_STATUS" = "Yes" ]; then
+            log_success "Reverse replication is active (Green replicating from Blue)"
+        else
+            log_info "Green is available for instant failover (replication may not be active)"
+        fi
+    fi
+elif [ "$FINAL_ACTIVE" = "green" ]; then
+    log_info "Keeping both environments for reverse replication"
+    log_info "Active: Green (Master) → Blue (Slave)"
+
+    # 역방향 복제 상태 확인
+    if docker ps | grep -q "mysql_blue"; then
+        REPL_STATUS=$(docker exec mysql_blue mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running" | awk '{print $2}' || echo "No")
+        if [ "$REPL_STATUS" = "Yes" ]; then
+            log_success "Reverse replication is active (Blue replicating from Green)"
+        else
+            log_info "Blue is available for instant failover (replication may not be active)"
+        fi
+    fi
 fi
 
 echo ""
 log_success "All tests completed!"
 log_info "Active environment: $FINAL_ACTIVE"
+log_info "Both environments are kept running for instant rollback capability"

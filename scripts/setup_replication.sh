@@ -27,18 +27,35 @@ for i in {1..30}; do
     sleep 5
 done
 
-# Master (Blue) 설정
-echo "Configuring Blue (Master) environment..."
+# 양쪽 MySQL에 복제 사용자 생성 (양방향 복제 지원)
+echo "Configuring replication users on both servers..."
 
-# 복제 사용자가 이미 존재하는지 확인
-if ! docker exec mysql_blue mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SELECT User FROM mysql.user WHERE User='${REPLICATION_USER}'" | grep -q "${REPLICATION_USER}"; then
-    echo "Creating replication user..."
+# Blue MySQL에 복제 사용자 생성
+if ! docker exec mysql_blue mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SELECT User FROM mysql.user WHERE User='${REPLICATION_USER}'" 2>/dev/null | grep -q "${REPLICATION_USER}"; then
+    echo "Creating replication user on Blue MySQL..."
     docker exec mysql_blue mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "
     CREATE USER '${REPLICATION_USER}'@'%' IDENTIFIED WITH 'mysql_native_password' BY '${REPLICATION_PASSWORD}';
     GRANT REPLICATION SLAVE ON *.* TO '${REPLICATION_USER}'@'%';
     FLUSH PRIVILEGES;
-    "
+    " 2>/dev/null
+else
+    echo "Replication user already exists on Blue MySQL"
 fi
+
+# Green MySQL에 복제 사용자 생성
+if ! docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SELECT User FROM mysql.user WHERE User='${REPLICATION_USER}'" 2>/dev/null | grep -q "${REPLICATION_USER}"; then
+    echo "Creating replication user on Green MySQL..."
+    docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "
+    CREATE USER '${REPLICATION_USER}'@'%' IDENTIFIED WITH 'mysql_native_password' BY '${REPLICATION_PASSWORD}';
+    GRANT REPLICATION SLAVE ON *.* TO '${REPLICATION_USER}'@'%';
+    FLUSH PRIVILEGES;
+    " 2>/dev/null
+else
+    echo "Replication user already exists on Green MySQL"
+fi
+
+# Master (Blue) 설정
+echo "Configuring Blue (Master) environment..."
 
 # Master 상태 정보 가져오기
 echo "Getting master status..."

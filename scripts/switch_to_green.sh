@@ -58,6 +58,7 @@ if [ -n "$GREEN_FILE" ] && [ -n "$GREEN_POS" ]; then
     echo "Setting up Blue as slave of Green..."
     docker exec mysql_blue mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "
     STOP SLAVE;
+    RESET SLAVE ALL;
     CHANGE MASTER TO
       MASTER_HOST='mysql_green',
       MASTER_USER='replication_user',
@@ -67,7 +68,16 @@ if [ -n "$GREEN_FILE" ] && [ -n "$GREEN_POS" ]; then
     START SLAVE;
     SET GLOBAL read_only = ON;
     SET GLOBAL super_read_only = ON;
-    " 2>/dev/null || echo "⚠️ Reverse replication setup failed (Blue may not have replication user)"
+    " 2>/dev/null || echo "⚠️ Reverse replication setup failed"
+
+    # 복제 상태 확인
+    sleep 2
+    REPL_CHECK=$(docker exec mysql_blue mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running" | awk '{print $2}' || echo "No")
+    if [ "$REPL_CHECK" = "Yes" ]; then
+        echo "✅ Reverse replication successfully established"
+    else
+        echo "⚠️ Reverse replication may have issues, check manually"
+    fi
 fi
 
 # Nginx 업스트림 변경

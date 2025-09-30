@@ -605,6 +605,65 @@ docker-compose ps
 - **롤백 지원**: 문제 발생 시 이전 환경으로 자동 복원
 - **모니터링**: Nginx 상태 페이지 및 헬스체크 엔드포인트
 
+## 🗄️ 스키마 마이그레이션 전략
+
+Blue-Green 배포에서 데이터베이스 스키마 변경은 신중하게 처리해야 합니다.
+
+### **핵심 원칙**
+
+1. **하위 호환성 유지**: 구 버전이 신 스키마에서 작동 가능
+2. **확장-축소 패턴 사용**: 2단계 배포로 위험 최소화
+3. **롤백 가능성 확보**: 언제든 이전 버전으로 복귀
+
+### **안전한 변경 vs 위험한 변경**
+
+#### ✅ 안전한 변경 (단일 배포 가능)
+```sql
+-- 컬럼 추가 (NULL 허용)
+ALTER TABLE User ADD COLUMN email VARCHAR(255);
+
+-- 테이블 추가
+CREATE TABLE orders (...);
+
+-- 인덱스 추가/삭제
+CREATE INDEX idx_user_email ON User(email);
+```
+
+#### ⚠️ 위험한 변경 (2단계 배포 필수)
+```sql
+-- 컬럼 이름 변경
+ALTER TABLE User CHANGE name full_name VARCHAR(255);  ❌
+
+-- 컬럼 삭제
+ALTER TABLE User DROP COLUMN old_field;  ❌
+```
+
+### **Expand-Contract 패턴 예제**
+
+**Phase 1: Expand (v2.0)**
+```sql
+-- 새 컬럼 추가 (이전 컬럼 유지)
+ALTER TABLE User ADD COLUMN full_name VARCHAR(255);
+
+-- 동기화 트리거
+CREATE TRIGGER user_sync BEFORE UPDATE ON User
+FOR EACH ROW SET NEW.full_name = NEW.name;
+```
+
+**Phase 2: Contract (v3.0 - 1~2주 후)**
+```sql
+-- 이전 컬럼 삭제
+ALTER TABLE User DROP COLUMN name;
+```
+
+### **상세 가이드**
+
+전체 마이그레이션 가이드는 [SCHEMA_MIGRATION_GUIDE.md](./SCHEMA_MIGRATION_GUIDE.md)를 참조하세요.
+
+실전 예제는 [examples/schema-migration/](./examples/schema-migration/)을 확인하세요.
+
+---
+
 ## 🐛 트러블슈팅
 
 ### 일반적인 문제들

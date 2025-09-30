@@ -140,7 +140,14 @@ jobs:
           # 디스크 공간 확인
           df -h
 
-          # Nginx 컨테이너 볼륨 마운트 확인 및 재생성
+          # 최소한 하나의 환경이 실행 중인지 확인
+          if ! docker ps | grep -q "app_blue" && ! docker ps | grep -q "app_green"; then
+            echo "🔧 Starting Blue environment first..."
+            docker-compose up -d app_blue mysql_blue
+            sleep 10
+          fi
+
+          # Nginx 컨테이너 확인 및 시작
           if docker ps -a | grep -q "nginx_lb"; then
             echo "🔧 Checking if Nginx needs volume update..."
             # upstream 파일이 마운트되었는지 확인
@@ -163,7 +170,7 @@ jobs:
           MAX_WAIT=30
           WAIT_COUNT=0
           while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
-            if docker exec nginx_lb test -f /etc/nginx/nginx.conf 2>/dev/null; then
+            if docker ps | grep -q "nginx_lb" && [ "$(docker inspect -f '{{.State.Status}}' nginx_lb 2>/dev/null)" = "running" ]; then
               echo "✅ Nginx container is ready"
               break
             fi
@@ -174,18 +181,11 @@ jobs:
 
           if [ $WAIT_COUNT -eq $MAX_WAIT ]; then
             echo "❌ Nginx container failed to become ready"
+            docker logs nginx_lb --tail 20
             exit 1
           fi
 
-          # 초기 심볼릭 링크가 없으면 blue로 설정
-          if ! docker exec nginx_lb test -L /etc/nginx/upstream.conf 2>/dev/null; then
-            echo "🔗 Creating initial symlink to blue environment..."
-            docker exec nginx_lb ln -sf /etc/nginx/upstream-blue.conf /etc/nginx/upstream.conf
-            docker exec nginx_lb nginx -s reload
-          fi
-
-          echo "✅ Nginx configuration status:"
-          docker exec nginx_lb ls -la /etc/nginx/ | grep -E "upstream"
+          echo "✅ Nginx is running successfully"
 
       - name: Setup MySQL replication (if needed)
         run: |

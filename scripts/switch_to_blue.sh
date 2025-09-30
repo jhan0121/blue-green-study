@@ -22,7 +22,8 @@ fi
 
 # Nginx 업스트림 변경
 echo "Updating Nginx configuration..."
-docker cp nginx/upstream-blue.conf nginx_lb:/etc/nginx/upstream.conf
+# 컨테이너 내부에서 파일 복사 (docker cp 대신)
+docker exec nginx_lb sh -c "cat /etc/nginx/upstream-blue.conf > /etc/nginx/upstream.conf"
 docker exec nginx_lb nginx -s reload
 
 echo "Traffic switched to Blue environment!"
@@ -39,7 +40,7 @@ if echo "$RESPONSE" | grep -iq blue; then
     docker-compose stop app_green mysql_green
 else
     echo "❌ Switch failed! Rolling back..."
-    docker cp nginx/upstream-green.conf nginx_lb:/etc/nginx/upstream.conf
+    docker exec nginx_lb sh -c "cat /etc/nginx/upstream-green.conf > /etc/nginx/upstream.conf"
     docker exec nginx_lb nginx -s reload
     exit 1
 fi

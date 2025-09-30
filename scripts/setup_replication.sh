@@ -42,10 +42,10 @@ fi
 
 # Master 상태 정보 가져오기
 echo "Getting master status..."
-docker exec mysql_blue mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW MASTER STATUS;" > /tmp/master_status.txt
+MASTER_STATUS=$(docker exec mysql_blue mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW MASTER STATUS;" 2>/dev/null)
 
-MASTER_FILE=$(tail -n +2 /tmp/master_status.txt | awk '{print $1}' | head -n 1)
-MASTER_POS=$(tail -n +2 /tmp/master_status.txt | awk '{print $2}' | head -n 1)
+MASTER_FILE=$(echo "$MASTER_STATUS" | tail -n +2 | awk '{print $1}' | head -n 1)
+MASTER_POS=$(echo "$MASTER_STATUS" | tail -n +2 | awk '{print $2}' | head -n 1)
 
 echo "Master File: $MASTER_FILE, Position: $MASTER_POS"
 

@@ -143,11 +143,15 @@ if ! docker ps | grep -q "app_green"; then
     docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SET GLOBAL read_only = OFF; SET GLOBAL super_read_only = OFF;" 2>/dev/null || true
 
     # Wait for Green to be ready
+    log_info "Waiting for Green environment to be ready..."
+    sleep 10
     for i in {1..10}; do
         if check_container_health "app_green" "Green application"; then
             break
         fi
-        sleep 3
+        if [ $i -lt 10 ]; then
+            sleep 5
+        fi
     done
 fi
 

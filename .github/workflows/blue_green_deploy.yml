@@ -23,10 +23,6 @@ on:
         type: boolean
 
 env:
-  MYSQL_ROOT_PASSWORD: rootpass
-  MYSQL_DATABASE: bluegreen
-  MYSQL_USER: app_user
-  MYSQL_PASSWORD: app_pass
   BUILD_NUMBER: ${{ github.run_number }}
 
 jobs:
@@ -55,21 +51,19 @@ jobs:
             ${{ runner.os }}-gradle-
 
       - name: Make gradlew executable
-        run: chmod +x bluegreen/gradlew
+        run: chmod +x gradlew
 
       - name: Run tests
-        working-directory: bluegreen
         run: ./gradlew test
 
       - name: Build application
-        working-directory: bluegreen
         run: ./gradlew clean build
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: jar-artifact
-          path: bluegreen/build/libs/*.jar
+          path: build/libs/*.jar
           retention-days: 7
 
   deploy:
@@ -91,21 +85,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: jar-artifact
-          path: bluegreen/build/libs/
+          path: build/libs/
 
       - name: Set up environment variables
         run: |
-          # .env 파일 설정 확인 및 생성
-          if [ ! -f .env ]; then
-            echo "BUILD_NUMBER=${{ env.BUILD_NUMBER }}" > .env
-            echo "MYSQL_ROOT_PASSWORD=${{ env.MYSQL_ROOT_PASSWORD }}" >> .env
-            echo "MYSQL_DATABASE=${{ env.MYSQL_DATABASE }}" >> .env
-            echo "MYSQL_USER=${{ env.MYSQL_USER }}" >> .env
-            echo "MYSQL_PASSWORD=${{ env.MYSQL_PASSWORD }}" >> .env
-          fi
-
-          # 환경 변수 로드
-          source .env
+          # .env 파일 생성
+          echo "BUILD_NUMBER=${{ env.BUILD_NUMBER }}" > .env
+          echo "MYSQL_ROOT_PASSWORD=${{ secrets.MYSQL_ROOT_PASSWORD }}" >> .env
+          echo "MYSQL_DATABASE=${{ secrets.MYSQL_DATABASE }}" >> .env
+          echo "MYSQL_USER=${{ secrets.MYSQL_USER }}" >> .env
+          echo "MYSQL_PASSWORD=${{ secrets.MYSQL_PASSWORD }}" >> .env
 
       - name: Detect current environment and determine target
         id: detect
@@ -186,9 +175,10 @@ jobs:
 
           # 환경별 배포
           export BUILD_NUMBER=${{ env.BUILD_NUMBER }}
-          export MYSQL_ROOT_PASSWORD=${{ env.MYSQL_ROOT_PASSWORD }}
-          export MYSQL_USER=${{ env.MYSQL_USER }}
-          export MYSQL_PASSWORD=${{ env.MYSQL_PASSWORD }}
+          export MYSQL_ROOT_PASSWORD=${{ secrets.MYSQL_ROOT_PASSWORD }}
+          export MYSQL_DATABASE=${{ secrets.MYSQL_DATABASE }}
+          export MYSQL_USER=${{ secrets.MYSQL_USER }}
+          export MYSQL_PASSWORD=${{ secrets.MYSQL_PASSWORD }}
 
           if [ "$TARGET_ENV" = "green" ]; then
             docker-compose up -d app_green mysql_green

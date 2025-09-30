@@ -25,71 +25,397 @@ Docker 컨테이너 기반 블루-그린 배포 실습 레포지토리입니다.
 
 블루-그린 배포는 두 개의 동일한 운영 환경(Blue/Green)을 유지하면서 무중단 배포를 실현하는 전략입니다.
 
-### 📊 배포 과정 상세 흐름
+## 📋 배포 시나리오별 상세 가이드
 
-#### 1️⃣ 초기 상태 (Blue 환경 운영)
-```
-사용자 → [Nginx] → [Blue App] ← [Blue MySQL (Master)]
-                         ↓
-                    [Green MySQL (Slave)]
-                    [Green App (Standby)]
-```
-- **Blue 환경**이 실제 트래픽 처리
-- **Green 환경**은 대기 상태 (복제를 통한 데이터 동기화)
+### 시나리오 1: 초기 배포 (Clean State)
 
-#### 2️⃣ 새 버전 배포 준비
+**상황**: 아무것도 배포되지 않은 상태에서 첫 배포
+
+#### 1단계: 인프라 준비
 ```bash
-# 1. Green 환경에 새 버전 배포
-docker-compose up -d app_green mysql_green
-
-# 2. 헬스체크 및 준비상태 확인
-curl http://localhost:8080/health  # Green 컨테이너 직접 확인
+# 네트워크 및 볼륨 자동 생성
+docker-compose up -d mysql_blue nginx
 ```
+**수행 작업:**
+- Docker 네트워크 생성 (`bluegreen-network`)
+- MySQL 볼륨 생성 및 초기화
+- Nginx 로드밸런서 시작
 
-#### 3️⃣ 데이터 동기화 확인
-```
-Blue MySQL (Master) → Green MySQL (Slave)
-        ↓                      ↓
-   [실시간 복제]          [복제 지연 확인]
-```
-- MySQL 복제 상태 점검
-- 데이터 동기화 완료 대기
-- 복제 지연시간 모니터링
-
-#### 4️⃣ 트래픽 전환 (Blue → Green)
+#### 2단계: Blue 환경 배포
 ```bash
-# 전환 과정 자동화
+# Blue 애플리케이션 배포
+docker build -t myapp:blue .
+docker-compose up -d app_blue
+```
+**배포 흐름:**
+```
+[빌드] → [이미지 생성] → [컨테이너 시작] → [헬스체크]
+   ↓           ↓              ↓              ↓
+Gradle     myapp:blue      app_blue       30초 대기
+```
+
+#### 3단계: 초기 트래픽 설정
+```bash
+# Nginx에서 Blue로 트래픽 라우팅 설정 (자동)
+# upstream.conf가 기본적으로 Blue를 가리킴
+```
+
+#### 4단계: 검증
+```bash
+curl http://localhost:3030/health
+# 응답: OK - blue
+
+curl http://localhost:3030/version
+# 응답: Version: 1 - Env: blue
+```
+
+**✅ 결과 상태:**
+```
+사용자 → [Nginx:3030] → [Blue App:8080] ← [Blue MySQL:3306]
+```
+
+---
+
+### 시나리오 2: Blue → Green 무중단 배포
+
+**상황**: Blue 환경이 운영 중이며, 새 버전을 Green으로 배포
+
+#### 1단계: 현재 상태 확인
+```bash
+# 현재 활성 환경 확인
+curl http://localhost:3030/health
+# 응답: OK - blue
+
+# 컨테이너 상태 확인
+docker ps --format "table {{.Names}}\t{{.Status}}"
+```
+**예상 출력:**
+```
+NAMES          STATUS
+app_blue       Up 10 minutes (healthy)
+mysql_blue     Up 10 minutes (healthy)
+nginx_lb       Up 10 minutes
+```
+
+#### 2단계: Green 환경 준비 (무중단)
+```bash
+# MySQL 복제 설정
+docker-compose --profile green up -d mysql_green
+sleep 10
+./scripts/setup_replication.sh
+```
+**복제 설정 과정:**
+```
+Blue MySQL (Master)
+    ↓ [Binary Log]
+    ↓ [Position: 197]
+    ↓
+Green MySQL (Slave)
+    ↓ [START SLAVE]
+    ↓ [Replication Running]
+    ✓ [Data Synced]
+```
+
+**핵심 포인트:**
+- ⚠️ **Blue는 계속 트래픽 처리** (다운타임 0초)
+- Green MySQL이 Blue 데이터를 실시간 복제
+- 복제 지연(Seconds_Behind_Master) 확인
+
+#### 3단계: Green 애플리케이션 배포
+```bash
+# 새 버전 이미지 빌드
+docker build -t myapp:green .
+
+# Green 애플리케이션 시작
+docker-compose --profile green up -d app_green
+```
+**배포 중 상태:**
+```
+사용자 → [Nginx] → [Blue App] (트래픽 100%)
+                      ↓
+                 [Blue MySQL] → [Green MySQL] (복제)
+                      ↑              ↓
+                  (활성)        [Green App] (준비중)
+```
+
+#### 4단계: Green 헬스체크
+```bash
+# 자동으로 30초간 헬스체크 수행
+# 최대 30회 재시도 (10초 간격)
+for i in {1..30}; do
+    if docker exec app_green curl -s -f http://localhost:8080/health; then
+        echo "Green is ready!"
+        break
+    fi
+    sleep 10
+done
+```
+
+#### 5단계: 트래픽 전환
+```bash
 ./scripts/switch_to_green.sh
-
-# 내부적으로 수행되는 작업들:
-# 1. Green 환경 헬스체크
-# 2. 복제 지연 확인 및 대기
-# 3. Blue DB를 읽기전용으로 전환
-# 4. Green DB에서 복제 중지 및 쓰기 활성화
-# 5. Nginx 업스트림을 Green으로 변경
-# 6. 전환 검증
 ```
-
-#### 5️⃣ 전환 완료 상태
-```
-사용자 → [Nginx] → [Green App] ← [Green MySQL (Master)]
-                         ↓
-                    [Blue MySQL (Standby)]
-                    [Blue App (Standby)]
-```
-- **Green 환경**이 실제 트래픽 처리
-- **Blue 환경**은 롤백을 위해 대기
-
-#### 6️⃣ 롤백 (문제 발생 시)
+**전환 과정 상세:**
 ```bash
-# 즉시 롤백 실행
-./scripts/switch_to_blue.sh
+1. Green 환경 최종 헬스체크
+   ✓ app_green:8080/health → OK
 
-# 자동 롤백 조건:
-# - Green 환경 헬스체크 실패
-# - 데이터베이스 연결 오류
-# - 애플리케이션 응답 오류
+2. 복제 지연 확인
+   mysql> SHOW SLAVE STATUS\G
+   Seconds_Behind_Master: 0  ✓
+
+3. Green MySQL 쓰기 활성화
+   mysql_green> SET GLOBAL read_only = OFF;
+
+4. Nginx 업스트림 변경
+   upstream.conf: app_blue → app_green
+   nginx -s reload
+
+5. 트래픽 검증 (5초 후)
+   curl localhost:3030/health
+   → OK - green ✓
 ```
+
+**트래픽 전환 타임라인:**
+```
+T+0s:  Blue 100% | Green 0%   (전환 시작)
+T+1s:  Blue 50%  | Green 50%  (Nginx reload 중)
+T+2s:  Blue 0%   | Green 100% (전환 완료)
+```
+
+#### 6단계: 전환 후 검증
+```bash
+# 여러 요청 테스트
+for i in {1..10}; do
+    curl -s http://localhost:3030/health
+    sleep 0.5
+done
+# 모든 응답: OK - green
+```
+
+#### 7단계: Blue 환경 정리 (선택적)
+```bash
+# 10초 대기 후 Blue 정리
+sleep 10
+docker-compose stop app_blue mysql_blue
+```
+
+**✅ 최종 상태:**
+```
+사용자 → [Nginx:3030] → [Green App:8080] ← [Green MySQL:3306]
+                              ↑
+                         (100% 트래픽)
+
+[Blue App] (정지)
+[Blue MySQL] (정지)
+```
+
+**📊 배포 메트릭:**
+- 다운타임: **0초**
+- 전환 시간: ~2초
+- 롤백 가능 기간: Green 검증 완료까지
+
+---
+
+### 시나리오 3: Green → Blue 롤백
+
+**상황**: Green 배포 후 문제 발견, Blue로 즉시 롤백 필요
+
+#### 1단계: 문제 감지
+```bash
+# Green 환경에서 에러 발생
+curl http://localhost:3030/health
+# 응답: 500 Internal Server Error
+
+# 로그 확인
+docker logs app_green --tail 50
+# ERROR: Database connection failed
+```
+
+#### 2단계: Blue 환경 재시작 (이미 정지된 경우)
+```bash
+# Blue가 정지되어 있으면 재시작
+if ! docker ps | grep -q "app_blue"; then
+    docker-compose up -d app_blue mysql_blue
+    sleep 10
+fi
+```
+
+#### 3단계: 즉시 롤백 실행
+```bash
+./scripts/switch_to_blue.sh
+```
+**롤백 과정:**
+```bash
+1. Blue 환경 헬스체크
+   ✓ app_blue:8080/health → OK
+
+2. Nginx 업스트림 변경
+   upstream.conf: app_green → app_blue
+   nginx -s reload
+
+3. 트래픽 검증
+   curl localhost:3030/health
+   → OK - blue ✓
+
+4. Green 환경 정리
+   docker-compose stop app_green mysql_green
+```
+
+**⚡ 롤백 타임라인:**
+```
+T+0s:  Green 100% (에러 발생)
+T+2s:  Blue 시작 확인
+T+4s:  Nginx 전환
+T+6s:  Blue 100% (롤백 완료)
+```
+
+**✅ 롤백 완료:**
+```
+사용자 → [Nginx:3030] → [Blue App:8080] ← [Blue MySQL:3306]
+                              ↑
+                         (안정적인 이전 버전)
+```
+
+**📊 롤백 메트릭:**
+- 롤백 시간: **~6초**
+- 에러 노출 시간: 최소화
+- 데이터 손실: 없음 (MySQL 복제 유지)
+
+---
+
+### 시나리오 4: Green 운영 중 → Blue로 새 버전 배포
+
+**상황**: Green이 운영 중이며, Blue로 새 버전 배포 (역방향 배포)
+
+이 시나리오는 **시나리오 2의 역방향**으로, 동일한 프로세스를 따릅니다:
+
+#### 간략 흐름:
+```bash
+1. 현재 상태: Green 활성
+   curl localhost:3030/health → OK - green
+
+2. Blue 환경 준비
+   docker build -t myapp:blue .
+   docker-compose up -d app_blue mysql_blue
+
+3. Blue 헬스체크 대기 (30초)
+
+4. 트래픽 전환
+   ./scripts/switch_to_blue.sh
+
+5. 검증 및 Green 정리
+   docker-compose stop app_green mysql_green
+```
+
+**✅ 결과:** Green → Blue 무중단 전환 완료
+
+---
+
+### 시나리오 5: 동일 환경 업데이트 (In-Place Update)
+
+**상황**: Blue 운영 중, Blue에 새 버전 직접 배포 (Green 미사용)
+
+⚠️ **주의**: 이 방법은 짧은 다운타임이 발생합니다.
+
+#### 프로세스:
+```bash
+1. 새 이미지 빌드
+   docker build -t myapp:blue .
+
+2. Blue 컨테이너 재시작
+   docker-compose up -d --force-recreate app_blue
+
+3. 헬스체크 대기
+   # 약 10-15초 다운타임 발생
+
+4. 서비스 복구
+   curl localhost:3030/health → OK - blue
+```
+
+**⚠️ 다운타임:**
+- 예상 다운타임: 10-20초
+- 권장하지 않음 (무중단 배포 위반)
+
+**💡 권장사항:**
+항상 Blue ↔ Green 방식을 사용하여 무중단 배포 유지
+
+---
+
+## 🔄 배포 시나리오 비교표
+
+| 시나리오 | 다운타임 | 롤백 시간 | 복잡도 | 권장도 |
+|---------|---------|----------|--------|--------|
+| 초기 배포 (Clean State) | N/A | N/A | ⭐ | ✅ 필수 |
+| Blue → Green 배포 | **0초** | ~6초 | ⭐⭐ | ✅ 권장 |
+| Green → Blue 롤백 | **0초** | ~6초 | ⭐⭐ | ✅ 권장 |
+| Green → Blue 배포 | **0초** | ~6초 | ⭐⭐ | ✅ 권장 |
+| In-Place Update | 10-20초 | N/A | ⭐ | ⚠️ 비권장 |
+
+---
+
+## 📊 배포 단계별 체크리스트
+
+### 배포 전 (Pre-Deployment)
+```bash
+☐ 새 버전 이미지 빌드 완료
+☐ 현재 활성 환경 확인
+☐ 타겟 환경 리소스 가용성 확인
+☐ 데이터베이스 백업 완료
+☐ 복제 상태 정상 (Green 사용 시)
+```
+
+### 배포 중 (During Deployment)
+```bash
+☐ 타겟 환경 컨테이너 시작 성공
+☐ 애플리케이션 헬스체크 통과
+☐ 데이터베이스 연결 정상
+☐ 복제 지연 시간 0초 (Green 사용 시)
+☐ Nginx 트래픽 전환 성공
+```
+
+### 배포 후 (Post-Deployment)
+```bash
+☐ 새 환경에서 정상 응답 확인
+☐ 주요 기능 테스트 통과
+☐ 로그 모니터링 (에러 없음)
+☐ 성능 메트릭 정상
+☐ 이전 환경 정리 (선택)
+```
+
+### 롤백 조건
+```bash
+☑ 헬스체크 실패 (3회 이상)
+☑ HTTP 5xx 에러 급증
+☑ 응답 시간 임계값 초과
+☑ 데이터베이스 연결 실패
+☑ 치명적인 버그 발견
+```
+
+---
+
+## 🎯 배포 전략 선택 가이드
+
+### 언제 Blue-Green을 사용할까?
+
+**✅ 사용 권장:**
+- 프로덕션 환경 배포
+- 중요 업데이트/핫픽스
+- 대규모 리팩토링
+- 데이터베이스 마이그레이션 포함
+
+**⚠️ 사용 고려:**
+- 개발/스테이징 환경 (간소화 가능)
+- 매우 작은 패치 (비용 대비 효과)
+
+### 배포 시간대 권장사항
+
+| 배포 유형 | 권장 시간 | 이유 |
+|----------|----------|------|
+| Major Update | 새벽 2-4시 | 트래픽 최소 시간대 |
+| Minor Update | 업무 시간 가능 | 무중단 배포 보장 |
+| Hotfix | 즉시 | 긴급 수정 필요 |
+| 데이터 마이그레이션 | 새벽 2-4시 | 복제 지연 최소화 |
 
 ### 🔧 핵심 메커니즘
 

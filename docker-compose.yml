@@ -15,8 +15,8 @@ services:
     image: myapp:blue
     container_name: app_blue
     build:
-      context: ./bluegreen
-      dockerfile: ../Dockerfile
+      context: .
+      dockerfile: Dockerfile
     environment:
       - APP_ENV=blue
       - BUILD_NUMBER=${BUILD_NUMBER:-1}
@@ -41,8 +41,10 @@ services:
     image: myapp:green
     container_name: app_green
     build:
-      context: ./bluegreen
-      dockerfile: ../Dockerfile
+      context: .
+      dockerfile: Dockerfile
+    profiles:
+      - green
     environment:
       - APP_ENV=green
       - BUILD_NUMBER=${BUILD_NUMBER:-1}
@@ -86,6 +88,8 @@ services:
   mysql_green:
     image: mysql:8.0
     container_name: mysql_green
+    profiles:
+      - green
     environment:
       - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-rootpass}
       - MYSQL_DATABASE=${MYSQL_DATABASE:-bluegreen}

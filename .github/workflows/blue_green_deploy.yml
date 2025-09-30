@@ -21,6 +21,7 @@ jobs:
 
       - name: Build application
         run: |
+          cd bluegreen
           chmod +x gradlew
           ./gradlew clean bootJar
 
@@ -52,15 +53,21 @@ jobs:
         run: |
           NEW_ENV=${{ steps.detect.outputs.new }}
           BUILD_NUMBER=${{ github.run_number }}
-          
+
           export BUILD_NUMBER=$BUILD_NUMBER
-          
+
           if [ "$NEW_ENV" = "green" ]; then
             docker-compose --profile green up -d app_green mysql_green
+            # Green MySQL read-only 해제 (새 배포용)
+            sleep 5
+            docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD:-rootpass} -e "SET GLOBAL read_only = OFF; SET GLOBAL super_read_only = OFF;" 2>/dev/null || true
           else
             docker-compose up -d app_blue mysql_blue
+            # Blue MySQL read-only 해제 (새 배포용)
+            sleep 5
+            docker exec mysql_blue mysql -u root -p${MYSQL_ROOT_PASSWORD:-rootpass} -e "SET GLOBAL read_only = OFF; SET GLOBAL super_read_only = OFF;" 2>/dev/null || true
           fi
-          
+
           # nginx가 없으면 시작
           if ! docker ps | grep -q "nginx_lb"; then
             docker-compose up -d nginx

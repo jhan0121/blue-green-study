@@ -136,8 +136,12 @@ log_info "Test 6: Environment Switching Test"
 # Start Green environment if not running
 if ! docker ps | grep -q "app_green"; then
     log_info "Starting Green environment for testing..."
-    docker-compose up -d app_green mysql_green >/dev/null 2>&1
-    
+    docker-compose --profile green up -d app_green mysql_green >/dev/null 2>&1
+
+    # Green MySQL read-only 해제
+    sleep 5
+    docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SET GLOBAL read_only = OFF; SET GLOBAL super_read_only = OFF;" 2>/dev/null || true
+
     # Wait for Green to be ready
     for i in {1..10}; do
         if check_container_health "app_green" "Green application"; then

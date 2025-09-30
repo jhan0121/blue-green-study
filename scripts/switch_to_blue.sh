@@ -22,14 +22,16 @@ fi
 
 # Nginx 업스트림 변경
 echo "Updating Nginx configuration..."
-docker exec nginx_lb sed -i 's/server app_green:8080/server app_blue:8080/g' /etc/nginx/nginx.conf
+cp nginx/nginx-blue.conf nginx/nginx.conf
 docker exec nginx_lb nginx -s reload
 
 echo "Traffic switched to Blue environment!"
 
 # 검증
 sleep 3
-if curl -s http://localhost:3030/health | grep -i blue; then
+RESPONSE=$(curl -s http://localhost:3030/health)
+echo "Health check response: $RESPONSE"
+if echo "$RESPONSE" | grep -iq blue; then
     echo "✅ Switch to Blue successful!"
 
     # Green 환경 정리
@@ -37,7 +39,7 @@ if curl -s http://localhost:3030/health | grep -i blue; then
     docker-compose stop app_green mysql_green
 else
     echo "❌ Switch failed! Rolling back..."
-    docker exec nginx_lb sed -i 's/server app_blue:8080/server app_green:8080/g' /etc/nginx/nginx.conf
+    cp nginx/nginx-green.conf nginx/nginx.conf
     docker exec nginx_lb nginx -s reload
     exit 1
 fi

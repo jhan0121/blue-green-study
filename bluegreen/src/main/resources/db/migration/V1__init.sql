@@ -1,5 +1,5 @@
 CREATE TABLE User (
-    id bigint NOT NULL auto increment,
-    name varchar(255) NOT NULL DEFAULT 'User'
-    primary(id)
-) ENGINE=Innodb, DEFAULT charset=utf8mb4;
+    id bigint NOT NULL auto_increment,
+    name varchar(255) NOT NULL DEFAULT 'User',
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

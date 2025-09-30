@@ -9,7 +9,11 @@ echo "Switching to Green environment..."
 # Green 환경이 실행 중인지 확인
 if ! docker ps | grep -q "app_green"; then
     echo "Starting Green environment..."
-    docker-compose up -d app_green mysql_green
+    docker-compose --profile green up -d app_green mysql_green
+
+    # Green MySQL read-only 해제
+    sleep 5
+    docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SET GLOBAL read_only = OFF; SET GLOBAL super_read_only = OFF;" 2>/dev/null || true
 
     # 헬스체크 대기
     echo "Waiting for Green environment to be healthy..."
@@ -34,14 +38,16 @@ fi
 
 # Nginx 업스트림 변경
 echo "Updating Nginx configuration..."
-docker exec nginx_lb sed -i 's/server app_blue:8080/server app_green:8080/g' /etc/nginx/nginx.conf
+cp nginx/nginx-green.conf nginx/nginx.conf
 docker exec nginx_lb nginx -s reload
 
 echo "Traffic switched to Green environment!"
 
 # 검증
 sleep 3
-if curl -s http://localhost:3030/health | grep -i green; then
+RESPONSE=$(curl -s http://localhost:3030/health)
+echo "Health check response: $RESPONSE"
+if echo "$RESPONSE" | grep -iq green; then
     echo "✅ Switch to Green successful!"
 
     # Blue 환경 정리 (선택사항)
@@ -49,7 +55,7 @@ if curl -s http://localhost:3030/health | grep -i green; then
     docker-compose stop app_blue mysql_blue
 else
     echo "❌ Switch failed! Rolling back..."
-    docker exec nginx_lb sed -i 's/server app_green:8080/server app_blue:8080/g' /etc/nginx/nginx.conf
+    cp nginx/nginx-blue.conf nginx/nginx.conf
     docker exec nginx_lb nginx -s reload
     exit 1
 fi

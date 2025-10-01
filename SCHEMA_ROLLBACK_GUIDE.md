@@ -634,4 +634,3 @@ SELECT * FROM User WHERE created_at > NOW() - INTERVAL 1 HOUR LIMIT 10;
 
 - [MySQL Point-in-Time Recovery](https://dev.mysql.com/doc/refman/8.0/en/point-in-time-recovery.html)
 - [Blue-Green Deployment Rollback Strategies](https://martinfowler.com/bliki/BlueGreenDeployment.html)
-- [Database Refactoring Best Practices](https://www.databaserefactoring.com/)

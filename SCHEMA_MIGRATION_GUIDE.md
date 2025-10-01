@@ -279,5 +279,5 @@ spring:
 ## 📚 참고 자료
 
 - [Expand-Contract Pattern](https://martinfowler.com/bliki/ParallelChange.html)
-- [MySQL Online DDL](https://dev.mysql.com/doc/refman/8.0/en/innate-online-ddl.html)
+- [MySQL Online DDL](https://dev.mysql.com/doc/refman/8.0/en/innodb-online-ddl.html)
 - [Flyway Documentation](https://flywaydb.org/documentation/)

@@ -2,6 +2,8 @@
 
 set -e
 
+MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-rootpass}
+
 echo "Switching to Blue environment..."
 
 # Blue 환경 시작 (중지된 경우)
@@ -24,14 +26,14 @@ fi
 echo "Setting up reverse replication (Blue → Green)..."
 
 # 1. Blue에서 복제 중지 및 쓰기 활성화
-docker exec mysql_blue mysql -u root -prootpass -e "
+docker exec mysql_blue mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "
 STOP SLAVE;
 SET GLOBAL read_only = OFF;
 SET GLOBAL super_read_only = OFF;
 " 2>/dev/null || true
 
 # 2. Blue의 Master 상태 가져오기
-BLUE_STATUS=$(docker exec mysql_blue mysql -u root -prootpass -e "SHOW MASTER STATUS;" 2>/dev/null)
+BLUE_STATUS=$(docker exec mysql_blue mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SHOW MASTER STATUS;" 2>/dev/null)
 BLUE_FILE=$(echo "$BLUE_STATUS" | tail -n +2 | awk '{print $1}' | head -n 1)
 BLUE_POS=$(echo "$BLUE_STATUS" | tail -n +2 | awk '{print $2}' | head -n 1)
 
@@ -40,7 +42,7 @@ echo "Blue Master Status - File: $BLUE_FILE, Position: $BLUE_POS"
 # 3. Green을 Blue의 Slave로 설정 (역방향 복제)
 if [ -n "$BLUE_FILE" ] && [ -n "$BLUE_POS" ] && docker ps | grep -q "mysql_green"; then
     echo "Setting up Green as slave of Blue..."
-    docker exec mysql_green mysql -u root -prootpass -e "
+    docker exec mysql_green mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "
     STOP SLAVE;
     RESET SLAVE ALL;
     CHANGE MASTER TO
@@ -56,7 +58,7 @@ if [ -n "$BLUE_FILE" ] && [ -n "$BLUE_POS" ] && docker ps | grep -q "mysql_green
 
     # 복제 상태 확인
     sleep 2
-    REPL_CHECK=$(docker exec mysql_green mysql -u root -prootpass -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running" | awk '{print $2}' || echo "No")
+    REPL_CHECK=$(docker exec mysql_green mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running" | awk '{print $2}' || echo "No")
     if [ "$REPL_CHECK" = "Yes" ]; then
         echo "✅ Reverse replication successfully established"
     else
@@ -85,7 +87,7 @@ if echo "$RESPONSE" | grep -iq blue; then
 
         # 복제 상태 확인
         echo "Checking reverse replication status..."
-        docker exec mysql_green mysql -u root -prootpass -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep -E "(Slave_IO_Running|Slave_SQL_Running)" || true
+        docker exec mysql_green mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep -E "(Slave_IO_Running|Slave_SQL_Running)" || true
     fi
 else
     echo "❌ Switch failed! Rolling back..."

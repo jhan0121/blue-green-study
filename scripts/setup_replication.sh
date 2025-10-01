@@ -75,7 +75,14 @@ fi
 echo "Configuring Green (Slave) environment..."
 
 # 기존 복제 설정 정지
-docker exec mysql_green mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "STOP SLAVE;" || true
+docker exec mysql_green mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "STOP SLAVE;" 2>/dev/null || true
+
+# Green을 read-only 모드로 설정 (replica로서)
+echo "Setting Green MySQL to read-only mode..."
+docker exec mysql_green mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "
+SET GLOBAL read_only = 1;
+SET GLOBAL super_read_only = 1;
+" 2>/dev/null
 
 docker exec mysql_green mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "
 CHANGE MASTER TO
@@ -85,7 +92,7 @@ CHANGE MASTER TO
   MASTER_LOG_FILE='${MASTER_FILE}',
   MASTER_LOG_POS=${MASTER_POS};
 START SLAVE;
-"
+" 2>/dev/null
 
 # 복제 상태 확인
 echo "Checking slave status..."

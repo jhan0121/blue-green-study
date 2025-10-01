@@ -4,8 +4,9 @@ log-bin = mysql-bin
 binlog-format = ROW
 gtid-mode = ON
 enforce-gtid-consistency = ON
-read-only = 1
 
 # 복제 설정
 relay-log = mysql-relay-bin
 log-slave-updates = 1
+
+# read-only는 복제 설정 시 동적으로 설정됨

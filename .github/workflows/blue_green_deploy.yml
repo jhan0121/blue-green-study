@@ -244,6 +244,7 @@ jobs:
               echo "Removing stopped mysql_green container..."
               docker rm mysql_green 2>/dev/null || true
             fi
+
             docker-compose --profile green up -d app_green mysql_green
           else
             # Blue 환경 배포 (정지된 컨테이너만 정리)
@@ -288,6 +289,9 @@ jobs:
 
           if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
             echo "❌ $TARGET_ENV environment failed to become ready"
+            # 실패 시 로그 출력
+            echo "=== Application logs ==="
+            docker logs app_$TARGET_ENV --tail 50
             exit 1
           fi
 

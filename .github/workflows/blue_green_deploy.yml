@@ -187,37 +187,6 @@ jobs:
 
           echo "✅ Nginx is running successfully"
 
-      - name: Setup MySQL replication (if needed)
-        run: |
-          TARGET_ENV=${{ steps.detect.outputs.target }}
-          CURRENT_ENV=${{ steps.detect.outputs.current }}
-
-          if [ "$CURRENT_ENV" != "none" ] && [ "$TARGET_ENV" = "green" ]; then
-            echo "🔄 Setting up MySQL replication for Green environment"
-
-            # Green 컨테이너가 정지 상태이고 네트워크 문제가 있는 경우에만 정리
-            if docker ps -a --filter "status=exited" --filter "name=mysql_green" --format "{{.Names}}" | grep -q "mysql_green"; then
-              echo "Cleaning up stopped mysql_green container with potential network issues..."
-              docker rm mysql_green 2>/dev/null || true
-            fi
-            if docker ps -a --filter "status=exited" --filter "name=app_green" --format "{{.Names}}" | grep -q "app_green"; then
-              echo "Cleaning up stopped app_green container with potential network issues..."
-              docker rm app_green 2>/dev/null || true
-            fi
-
-            # Green MySQL 시작 (이미 실행 중이면 스킵)
-            if ! docker ps | grep -q "mysql_green"; then
-              docker-compose --profile green up -d mysql_green
-              sleep 10
-            else
-              echo "mysql_green is already running"
-            fi
-
-            # 복제 설정 실행
-            chmod +x scripts/setup_replication.sh
-            ./scripts/setup_replication.sh || echo "⚠️  Replication setup failed, continuing with deployment"
-          fi
-
       - name: Deploy new environment
         id: deploy
         run: |
@@ -245,6 +214,17 @@ jobs:
               docker rm mysql_green 2>/dev/null || true
             fi
 
+            # Green MySQL이 실행 중이고 복제 상태라면, 복제 중지 및 read-only 해제
+            if docker ps | grep -q "mysql_green"; then
+              echo "🔓 Preparing Green MySQL for deployment (disabling replication and read-only)"
+              docker exec mysql_green mysql -u root -p${{ secrets.MYSQL_ROOT_PASSWORD }} -e "
+                STOP SLAVE;
+                RESET SLAVE ALL;
+                SET GLOBAL read_only = 0;
+                SET GLOBAL super_read_only = 0;
+              " 2>/dev/null || true
+            fi
+
             docker-compose --profile green up -d app_green mysql_green
           else
             # Blue 환경 배포 (정지된 컨테이너만 정리)
@@ -256,6 +236,18 @@ jobs:
               echo "Removing stopped mysql_blue container..."
               docker rm mysql_blue 2>/dev/null || true
             fi
+
+            # Blue MySQL이 실행 중이고 복제 상태라면, 복제 중지 및 read-only 해제
+            if docker ps | grep -q "mysql_blue"; then
+              echo "🔓 Preparing Blue MySQL for deployment (disabling replication and read-only)"
+              docker exec mysql_blue mysql -u root -p${{ secrets.MYSQL_ROOT_PASSWORD }} -e "
+                STOP SLAVE;
+                RESET SLAVE ALL;
+                SET GLOBAL read_only = 0;
+                SET GLOBAL super_read_only = 0;
+              " 2>/dev/null || true
+            fi
+
             docker-compose up -d app_blue mysql_blue
           fi
 

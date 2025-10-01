@@ -149,7 +149,7 @@ test_endpoint "$BASE_URL/version" "$CURRENT_ENV" "Version endpoint"
 echo ""
 log_info "Test 4: Database Connectivity"
 
-if docker exec mysql_blue mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SELECT 1" >/dev/null 2>&1; then
+if docker exec mysql_blue mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT 1" >/dev/null 2>&1; then
     log_success "Blue MySQL connection successful"
 else
     log_error "Blue MySQL connection failed"
@@ -165,7 +165,7 @@ ACTIVE_ENV=$(curl -s "$BASE_URL/health" 2>/dev/null | grep -oiE "(blue|green)" |
 if [ "$ACTIVE_ENV" = "blue" ]; then
     # Blue가 활성이면 Green이 Blue의 Slave여야 함
     if docker ps | grep -q "mysql_green"; then
-        SLAVE_STATUS=$(docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running" | awk '{print $2}' || echo "No")
+        SLAVE_STATUS=$(docker exec mysql_green mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running" | awk '{print $2}' || echo "No")
         if [ "$SLAVE_STATUS" = "Yes" ]; then
             log_success "MySQL replication is running (Blue → Green)"
         else
@@ -177,7 +177,7 @@ if [ "$ACTIVE_ENV" = "blue" ]; then
 elif [ "$ACTIVE_ENV" = "green" ]; then
     # Green이 활성이면 Blue가 Green의 Slave여야 함
     if docker ps | grep -q "mysql_blue"; then
-        SLAVE_STATUS=$(docker exec mysql_blue mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running" | awk '{print $2}' || echo "No")
+        SLAVE_STATUS=$(docker exec mysql_blue mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running" | awk '{print $2}' || echo "No")
         if [ "$SLAVE_STATUS" = "Yes" ]; then
             log_success "MySQL replication is running (Green → Blue)"
         else
@@ -216,7 +216,7 @@ if ! docker ps | grep -q "$TARGET_CONTAINER"; then
         docker-compose --profile green up -d app_green mysql_green >/dev/null 2>&1
         # Green MySQL read-only 해제
         sleep 5
-        docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SET GLOBAL read_only = OFF; SET GLOBAL super_read_only = OFF;" 2>/dev/null || true
+        docker exec mysql_green mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SET GLOBAL read_only = OFF; SET GLOBAL super_read_only = OFF;" 2>/dev/null || true
     else
         docker-compose up -d app_blue mysql_blue >/dev/null 2>&1
     fi
@@ -304,7 +304,7 @@ if [ "$FINAL_ACTIVE" = "blue" ]; then
 
     # 역방향 복제 상태 확인
     if docker ps | grep -q "mysql_green"; then
-        REPL_STATUS=$(docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running" | awk '{print $2}' || echo "No")
+        REPL_STATUS=$(docker exec mysql_green mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running" | awk '{print $2}' || echo "No")
         if [ "$REPL_STATUS" = "Yes" ]; then
             log_success "Reverse replication is active (Green replicating from Blue)"
         else
@@ -317,7 +317,7 @@ elif [ "$FINAL_ACTIVE" = "green" ]; then
 
     # 역방향 복제 상태 확인
     if docker ps | grep -q "mysql_blue"; then
-        REPL_STATUS=$(docker exec mysql_blue mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running" | awk '{print $2}' || echo "No")
+        REPL_STATUS=$(docker exec mysql_blue mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SHOW SLAVE STATUS\G" 2>/dev/null | grep "Slave_IO_Running" | awk '{print $2}' || echo "No")
         if [ "$REPL_STATUS" = "Yes" ]; then
             log_success "Reverse replication is active (Blue replicating from Green)"
         else

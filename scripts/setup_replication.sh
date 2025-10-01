@@ -31,9 +31,9 @@ done
 echo "Configuring replication users on both servers..."
 
 # Blue MySQL에 복제 사용자 생성
-if ! docker exec mysql_blue mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SELECT User FROM mysql.user WHERE User='${REPLICATION_USER}'" 2>/dev/null | grep -q "${REPLICATION_USER}"; then
+if ! docker exec mysql_blue mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT User FROM mysql.user WHERE User='${REPLICATION_USER}'" 2>/dev/null | grep -q "${REPLICATION_USER}"; then
     echo "Creating replication user on Blue MySQL..."
-    docker exec mysql_blue mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "
+    docker exec mysql_blue mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "
     CREATE USER '${REPLICATION_USER}'@'%' IDENTIFIED WITH 'mysql_native_password' BY '${REPLICATION_PASSWORD}';
     GRANT REPLICATION SLAVE ON *.* TO '${REPLICATION_USER}'@'%';
     FLUSH PRIVILEGES;
@@ -43,9 +43,9 @@ else
 fi
 
 # Green MySQL에 복제 사용자 생성
-if ! docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SELECT User FROM mysql.user WHERE User='${REPLICATION_USER}'" 2>/dev/null | grep -q "${REPLICATION_USER}"; then
+if ! docker exec mysql_green mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT User FROM mysql.user WHERE User='${REPLICATION_USER}'" 2>/dev/null | grep -q "${REPLICATION_USER}"; then
     echo "Creating replication user on Green MySQL..."
-    docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "
+    docker exec mysql_green mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "
     CREATE USER '${REPLICATION_USER}'@'%' IDENTIFIED WITH 'mysql_native_password' BY '${REPLICATION_PASSWORD}';
     GRANT REPLICATION SLAVE ON *.* TO '${REPLICATION_USER}'@'%';
     FLUSH PRIVILEGES;
@@ -59,7 +59,7 @@ echo "Configuring Blue (Master) environment..."
 
 # Master 상태 정보 가져오기
 echo "Getting master status..."
-MASTER_STATUS=$(docker exec mysql_blue mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW MASTER STATUS;" 2>/dev/null)
+MASTER_STATUS=$(docker exec mysql_blue mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SHOW MASTER STATUS;" 2>/dev/null)
 
 MASTER_FILE=$(echo "$MASTER_STATUS" | tail -n +2 | awk '{print $1}' | head -n 1)
 MASTER_POS=$(echo "$MASTER_STATUS" | tail -n +2 | awk '{print $2}' | head -n 1)
@@ -75,9 +75,9 @@ fi
 echo "Configuring Green (Slave) environment..."
 
 # 기존 복제 설정 정지
-docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "STOP SLAVE;" || true
+docker exec mysql_green mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "STOP SLAVE;" || true
 
-docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "
+docker exec mysql_green mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "
 CHANGE MASTER TO
   MASTER_HOST='mysql_blue',
   MASTER_USER='${REPLICATION_USER}',
@@ -90,6 +90,6 @@ START SLAVE;
 # 복제 상태 확인
 echo "Checking slave status..."
 sleep 5
-docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW SLAVE STATUS\G" | grep -E "(Slave_IO_Running|Slave_SQL_Running|Seconds_Behind_Master)"
+docker exec mysql_green mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SHOW SLAVE STATUS\G" | grep -E "(Slave_IO_Running|Slave_SQL_Running|Seconds_Behind_Master)"
 
 echo "Replication setup completed!"

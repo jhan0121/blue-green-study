@@ -30,7 +30,7 @@ if [ "$ENVIRONMENT" = "green" ]; then
     fi
 
     # 2. Green의 복제 상태 확인
-    SLAVE_STATUS=$(docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW SLAVE STATUS\G" | grep "Seconds_Behind_Master" | awk '{print $2}' || echo "NULL")
+    SLAVE_STATUS=$(docker exec mysql_green mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SHOW SLAVE STATUS\G" | grep "Seconds_Behind_Master" | awk '{print $2}' || echo "NULL")
 
     if [ "$SLAVE_STATUS" != "0" ] && [ "$SLAVE_STATUS" != "NULL" ]; then
         echo "Warning: Green environment is $SLAVE_STATUS seconds behind!"
@@ -39,10 +39,10 @@ if [ "$ENVIRONMENT" = "green" ]; then
     fi
 
     # 3. Blue를 읽기 전용으로 전환 (쓰기 트래픽 중지)
-    docker exec mysql_blue mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SET GLOBAL read_only = ON;"
+    docker exec mysql_blue mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SET GLOBAL read_only = ON;"
 
     # 4. Green에서 복제 중지 및 쓰기 가능으로 전환
-    docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "STOP SLAVE; SET GLOBAL read_only = OFF;"
+    docker exec mysql_green mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "STOP SLAVE; SET GLOBAL read_only = OFF;"
 
     # 5. Nginx 설정 변경
     docker exec nginx_lb sed -i 's/server app_blue:8080/server app_green:8080/g' /etc/nginx/nginx.conf
@@ -83,8 +83,8 @@ elif [ "$ENVIRONMENT" = "blue" ]; then
     fi
 
     # 2. 역방향 전환 로직
-    docker exec mysql_green mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SET GLOBAL read_only = ON;"
-    docker exec mysql_blue mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SET GLOBAL read_only = OFF;"
+    docker exec mysql_green mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SET GLOBAL read_only = ON;"
+    docker exec mysql_blue mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SET GLOBAL read_only = OFF;"
 
     # 3. Nginx 설정 변경
     docker exec nginx_lb sed -i 's/server app_green:8080/server app_blue:8080/g' /etc/nginx/nginx.conf
